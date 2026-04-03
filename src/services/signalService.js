@@ -5,8 +5,28 @@ const logger = createLogger('signal');
 
 class SignalService {
   constructor() {
-    // Map<symbol, lastAlertTimestamp>
-    this.lastAlertTimes = new Map();
+    // Map<symbol, {
+    //   lastAlertTime: number | null,          // for cooldown
+    //   lastBuildup: {                         // for cascade detection
+    //     timestamp: number,
+    //     change5m: number,
+    //     strength: string
+    //   } | null
+    // }>
+    this.symbolStates = new Map();
+  }
+
+  /**
+   * Get or create symbol state
+   */
+  getSymbolState(symbol) {
+    if (!this.symbolStates.has(symbol)) {
+      this.symbolStates.set(symbol, {
+        lastAlertTime: null,
+        lastBuildup: null,
+      });
+    }
+    return this.symbolStates.get(symbol);
   }
 
   /**
@@ -15,12 +35,6 @@ class SignalService {
    */
   async checkSignal(symbol, oiService) {
     try {
-      // Check cooldown
-      if (this.isInCooldown(symbol)) {
-        logger.debug('Symbol in cooldown, skipping', { symbol });
-        return null;
-      }
-
       // Get 5-minute OI change (primary signal)
       const change5m = await oiService.getOIChange(symbol, '5min');
 
@@ -48,7 +62,6 @@ class SignalService {
 
       // 15-minute change must confirm same direction
       const direction = changePercent > 0 ? 'positive' : 'negative';
-      const oppositeDirection = changePercent > 0 ? 'negative' : 'positive';
 
       if (direction === 'positive' && change15m.changePercent <= 0) {
         logger.debug('15m change not positive, rejecting buildup signal', {
@@ -71,7 +84,9 @@ class SignalService {
       const strength15m = this.determineSignal(change15m.changePercent);
       if (strength15m && strength15m.level !== signalInfo.level) {
         if (strength15m.level > signalInfo.level) {
-          signalInfo = strength15m;
+          signalInfo.type === signalInfo.type; // keep original type
+          signalInfo.level = strength15m.level;
+          signalInfo.multiplier = strength15m.multiplier;
           logger.debug('Signal strength boosted by 15m confirmation', {
             symbol,
             type: signalInfo.type,
@@ -81,12 +96,66 @@ class SignalService {
         }
       }
 
-      // Set cooldown
-      this.setCooldown(symbol);
+      // Check for CASCADE: LIQUIDATION after recent BUILDUP
+      let isCascade = false;
+      let buildupContext = null;
+      if (signalInfo.type === 'LIQUIDATION') {
+        const state = this.getSymbolState(symbol);
+        if (state.lastBuildup) {
+          const cascadeWindowMs = config.app.cascadeWindowMinutes * 60 * 1000;
+          const timeSinceBuildup = Date.now() - state.lastBuildup.timestamp;
+          if (timeSinceBuildup <= cascadeWindowMs) {
+            isCascade = true;
+            buildupContext = {
+              change5m: state.lastBuildup.change5m,
+              strength: state.lastBuildup.strength,
+              timeAgoMinutes: Math.round(timeSinceBuildup / 60000),
+            };
+            logger.info('CASCADE detected', {
+              symbol,
+              buildupChange: buildupContext.change5m,
+              buildupStrength: buildupContext.strength,
+              minutesSinceBuildup: buildupContext.timeAgoMinutes,
+              liquidationChange: changePercent,
+            });
+          } else {
+            logger.debug('Buildup too old for cascade', {
+              symbol,
+              minutesAgo: Math.round(timeSinceBuildup / 60000),
+            });
+          }
+        }
+      }
 
-      return {
+      // Determine final signal type
+      const finalType = isCascade ? 'CASCADE' : signalInfo.type;
+
+      // Check cooldown (CASCADE bypasses it)
+      if (!isCascade && this.isInCooldown(symbol)) {
+        logger.debug('Symbol in cooldown, skipping', { symbol });
+        return null;
+      }
+
+      // If BUILDUP → store event for potential cascade detection
+      if (signalInfo.type === 'BUILDUP') {
+        this.storeBuildupEvent(symbol, signalInfo, change5m.changePercent);
+        logger.info('Buildup event stored', {
+          symbol,
+          change5m: change5m.changePercent,
+          strength: signalInfo.level,
+        });
+      }
+
+      // Set cooldown (not for CASCADE - CASCADE always alerts)
+      if (!isCascade) {
+        this.setCooldown(symbol);
+      } else {
+        logger.info('CASCADE bypasses cooldown', { symbol });
+      }
+
+      const result = {
         symbol,
-        type: signalInfo.type,
+        type: finalType,
         change5m: change5m.changePercent,
         change15m: change15m.changePercent,
         strength: signalInfo.level,
@@ -97,10 +166,31 @@ class SignalService {
         currentOI15m: change15m.currentOI,
         timestamp: new Date().toISOString(),
       };
+
+      // Add cascade context if applicable
+      if (isCascade && buildupContext) {
+        result.buildupChange5m = buildupContext.change5m;
+        result.buildupStrength = buildupContext.strength;
+        result.buildupTimeAgoMinutes = buildupContext.timeAgoMinutes;
+      }
+
+      return result;
     } catch (error) {
       logger.error('Error checking signal', { symbol, error: error.message });
       return null;
     }
+  }
+
+  /**
+   * Store a BUILDUP event for cascade detection
+   */
+  storeBuildupEvent(symbol, signalInfo, change5m) {
+    const state = this.getSymbolState(symbol);
+    state.lastBuildup = {
+      timestamp: Date.now(),
+      change5m,
+      strength: signalInfo.level,
+    };
   }
 
   /**
@@ -133,21 +223,22 @@ class SignalService {
    * Check if symbol is in cooldown period
    */
   isInCooldown(symbol) {
-    const lastAlert = this.lastAlertTimes.get(symbol);
-    if (!lastAlert) {
+    const state = this.symbolStates.get(symbol);
+    if (!state || !state.lastAlertTime) {
       return false;
     }
 
     const cooldownMs = config.app.alertCooldownMinutes * 60 * 1000;
     const now = Date.now();
-    return now - lastAlert < cooldownMs;
+    return now - state.lastAlertTime < cooldownMs;
   }
 
   /**
    * Set cooldown for a symbol
    */
   setCooldown(symbol) {
-    this.lastAlertTimes.set(symbol, Date.now());
+    const state = this.getSymbolState(symbol);
+    state.lastAlertTime = Date.now();
     logger.debug('Cooldown set for symbol', { symbol });
   }
 
@@ -155,13 +246,13 @@ class SignalService {
    * Get remaining cooldown time in minutes
    */
   getRemainingCooldown(symbol) {
-    const lastAlert = this.lastAlertTimes.get(symbol);
-    if (!lastAlert) {
+    const state = this.symbolStates.get(symbol);
+    if (!state || !state.lastAlertTime) {
       return 0;
     }
 
     const cooldownMs = config.app.alertCooldownMinutes * 60 * 1000;
-    const elapsed = Date.now() - lastAlert;
+    const elapsed = Date.now() - state.lastAlertTime;
     const remainingMs = cooldownMs - elapsed;
 
     return remainingMs > 0 ? Math.ceil(remainingMs / (60 * 1000)) : 0;
@@ -171,7 +262,17 @@ class SignalService {
    * Clear cooldown for a symbol (useful for testing)
    */
   clearCooldown(symbol) {
-    this.lastAlertTimes.delete(symbol);
+    const state = this.symbolStates.get(symbol);
+    if (state) {
+      state.lastAlertTime = null;
+    }
+  }
+
+  /**
+   * Clear all state for a symbol (useful for testing)
+   */
+  clearSymbolState(symbol) {
+    this.symbolStates.delete(symbol);
   }
 
   /**
@@ -179,7 +280,7 @@ class SignalService {
    */
   getCooldownSymbols() {
     const cooldownSymbols = [];
-    for (const [symbol, timestamp] of this.lastAlertTimes.entries()) {
+    for (const [symbol, state] of this.symbolStates.entries()) {
       if (this.isInCooldown(symbol)) {
         cooldownSymbols.push({
           symbol,
@@ -188,6 +289,14 @@ class SignalService {
       }
     }
     return cooldownSymbols;
+  }
+
+  /**
+   * Get last BUILDUP event for a symbol (for debugging/API)
+   */
+  getLastBuildup(symbol) {
+    const state = this.symbolStates.get(symbol);
+    return state?.lastBuildup || null;
   }
 }
 

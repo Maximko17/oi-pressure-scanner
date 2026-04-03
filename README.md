@@ -6,9 +6,10 @@ Production-ready Node.js application that monitors cryptocurrency futures market
 
 - **Symbol Selection**: Automatically filters USDT perpetual futures with >$50M 24h turnover and >5% volatility
 - **OI Monitoring**: Fetches open interest every 60 seconds with interval-based aggregation
-- **Dual Signal Detection**:
-  - **BUILDUP** - OI increase (position accumulation): +10% to +25%+ 
-  - **LIQUIDATION** - OI decrease (position closing/liquidations): -10% to -20%+
+- **Triple Signal Detection**:
+  - **BUILDUP** - OI increase (new positions opening): +10% to +25%+
+  - **LIQUIDATION** - OI decrease (positions closing/liquidating): -10% to -20%+
+  - **CASCADE** - BUILDUP followed by LIQUIDATION within 30 min (high-value signal, bypasses cooldown)
 - **Signal Strength**: WEAK (10%/10%), STRONG (15%/15%), EXTREME (25%/20%)
 - **Telegram Alerts**: Instant notifications with formatted messages and trading links
 - **Pushover Alerts**: Backup notification channel (optional, no VPN dependency)
@@ -199,6 +200,7 @@ Log levels:
 | `SYMBOL_REFRESH_INTERVAL_MS` | `900000` (15 min) | How often to refresh symbol list |
 | `OI_FETCH_INTERVAL_MS` | `60000` (60 sec) | How often to fetch OI data |
 | `ALERT_COOLDOWN_MINUTES` | `10` | Minimum time between alerts per symbol |
+| `CASCADE_WINDOW_MINUTES` | `30` | Time window for BUILDUP→LIQUIDATION cascade detection |
 | `CONCURRENT_FETCHES` | `20` | Number of parallel OI fetch requests |
 | `LOG_LEVEL` | `info` | Log level: error, warn, info, debug |
 
@@ -219,6 +221,13 @@ Log levels:
   - WEAK: -10% to -15%
   - STRONG: -15% to -20%
   - EXTREME: -20%+
+
+### CASCADE (BUILDUP → LIQUIDATION Sequence)
+- **Trigger**: LIQUIDATION detected AND BUILDUP occurred within the last 30 minutes (configurable)
+- **Confirmation**: Inherits from both BUILDUP and LIQUIDATION events
+- **Cooldown**: Bypassed — CASCADE alerts always fire immediately
+- **Meaning**: Traders opened positions and they're now being forced out — strong reversal signal
+- **Strength**: Inherits from the LIQUIDATION event's strength level
 
 **Note**: The 15-minute interval can boost the signal strength if it's higher than the 5-minute strength.
 

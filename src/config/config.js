@@ -26,6 +26,7 @@ export const config = {
     symbolRefreshIntervalMs: parseInt(process.env.SYMBOL_REFRESH_INTERVAL_MS || '900000', 10),
     oiFetchIntervalMs: parseInt(process.env.OI_FETCH_INTERVAL_MS || '60000', 10),
     alertCooldownMinutes: parseInt(process.env.ALERT_COOLDOWN_MINUTES || '10', 10),
+    cascadeWindowMinutes: parseInt(process.env.CASCADE_WINDOW_MINUTES || '30', 10),
     concurrentFetches: parseInt(process.env.CONCURRENT_FETCHES || '20', 10),
   },
 };

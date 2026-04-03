@@ -52,7 +52,7 @@ async initialize() {
     }
 
     try {
-      const { symbol, type, change5m, change15m, strength, currentOI, previousOI5m, currentOI5m, previousOI15m, currentOI15m, timestamp } = signal;
+      const { symbol, type, change5m, change15m, strength, currentOI, previousOI5m, currentOI5m, previousOI15m, currentOI15m, timestamp, buildupChange5m, buildupStrength, buildupTimeAgoMinutes } = signal;
 
       // Format message according to specification
       const message = this.formatAlertMessage({
@@ -67,6 +67,9 @@ async initialize() {
         previousOI15m,
         currentOI15m,
         timestamp,
+        buildupChange5m,
+        buildupStrength,
+        buildupTimeAgoMinutes,
       });
 
       await this.bot.sendMessage(config.telegram.chatId, message, {
@@ -106,37 +109,61 @@ async initialize() {
       return;
     }
 
-    const { symbol, type, change5m, change15m, strength, currentOI, timestamp } = signal;
+    const { symbol, type, change5m, change15m, strength, currentOI, timestamp, buildupChange5m, buildupStrength, buildupTimeAgoMinutes } = signal;
 
     const formatChange = (val) => (val >= 0 ? `+${val.toFixed(2)}%` : `${val.toFixed(2)}%`);
     const strengthEmoji = this.getStrengthEmoji(strength);
 
-    const message = [
-      `OI Event Detected ${strengthEmoji}`,
-      ``,
-      `Symbol: ${symbol}`,
-      `Type: ${type}`,
-      ``,
-      `OI Change:`,
-      `  5m:  ${formatChange(change5m)}`,
-      `  15m: ${formatChange(change15m)}`,
-      ``,
-      `Signal Strength: ${strength}`,
-      `Current OI: ${currentOI.toLocaleString()}`,
-      ``,
-      `Bybit: https://www.bybit.com/trade/usdt/${symbol}`,
-      `Coinglass: https://www.coinglass.com/tv/ru/Bybit_${symbol}`,
-      ``,
-      `Timestamp: ${new Date(timestamp).toUTCString()}`,
-    ].join('\n');
+    let message;
 
-    const priority = strength === 'EXTREME' ? 2 : strength === 'STRONG' ? 1 : 0;
+    if (type === 'CASCADE') {
+      message = [
+        `CASCADE DETECTED ${strengthEmoji}`,
+        ``,
+        `Symbol: ${symbol}`,
+        ``,
+        `Earlier:`,
+        `  BUILDUP ${formatChange(buildupChange5m)} (${buildupStrength}, ${buildupTimeAgoMinutes} min ago)`,
+        ``,
+        `Now:`,
+        `  LIQUIDATION ${formatChange(change5m)}`,
+        `  15m: ${formatChange(change15m)}`,
+        ``,
+        `Signal Strength: ${strength}`,
+        ``,
+        `Bybit: https://www.bybit.com/trade/usdt/${symbol}`,
+        `Coinglass: https://www.coinglass.com/tv/ru/Bybit_${symbol}`,
+        ``,
+        `Timestamp: ${new Date(timestamp).toUTCString()}`,
+      ].join('\n');
+    } else {
+      message = [
+        `OI Event Detected ${strengthEmoji}`,
+        ``,
+        `Symbol: ${symbol}`,
+        `Type: ${type}`,
+        ``,
+        `OI Change:`,
+        `  5m:  ${formatChange(change5m)}`,
+        `  15m: ${formatChange(change15m)}`,
+        ``,
+        `Signal Strength: ${strength}`,
+        ``,
+        `Bybit: https://www.bybit.com/trade/usdt/${symbol}`,
+        `Coinglass: https://www.coinglass.com/tv/ru/Bybit_${symbol}`,
+        ``,
+        `Timestamp: ${new Date(timestamp).toUTCString()}`,
+      ].join('\n');
+    }
+
+    // CASCADE always gets priority 2 (emergency)
+    const priority = type === 'CASCADE' ? 2 : strength === 'EXTREME' ? 2 : strength === 'STRONG' ? 1 : 0;
 
     const body = new URLSearchParams({
       token: config.pushover.token,
       user: config.pushover.user,
       message,
-      title: `OI Alert: ${symbol}`,
+      title: type === 'CASCADE' ? `CASCADE: ${symbol}` : `OI Alert: ${symbol}`,
       priority: String(priority),
     });
 
@@ -159,7 +186,7 @@ async initialize() {
   /**
    * Format alert message according to specification
    */
-  formatAlertMessage({ symbol, type, change5m, change15m, strength, currentOI, previousOI5m, currentOI5m, previousOI15m, currentOI15m, timestamp }) {
+  formatAlertMessage({ symbol, type, change5m, change15m, strength, currentOI, previousOI5m, currentOI5m, previousOI15m, currentOI15m, timestamp, buildupChange5m, buildupStrength, buildupTimeAgoMinutes }) {
     const bybitUrl = `https://www.bybit.com/trade/usdt/${symbol}`;
     const coinglassUrl = `https://www.coinglass.com/tv/ru/Bybit_${symbol}`;
 
@@ -170,7 +197,7 @@ async initialize() {
     const strengthEmoji = this.getStrengthEmoji(strength);
 
     // Format percentage changes with proper sign
-    const formatChange = (val) => (val >= 0 ? `+${val.toFixed(2)}%` : `${val.toFixed(2)}%`);
+    const formatChange = (val) => (val != null ? (val >= 0 ? `+${val.toFixed(2)}%` : `${val.toFixed(2)}%`) : 'N/A');
 
     // Format OI values with previous→current notation
     const formatOIPair = (prev, curr) => {
@@ -178,24 +205,47 @@ async initialize() {
       return ` (${prev.toLocaleString()} → ${curr.toLocaleString()})`;
     };
 
+    if (type === 'CASCADE') {
+      return `
+🚨 CASCADE DETECTED ${strengthEmoji}
+
+Symbol: <b>${symbol}</b>
+
+Earlier:
+BUILDUP <b>${formatChange(buildupChange5m)}</b> (${buildupStrength}, ${buildupTimeAgoMinutes} min ago)
+
+Now:
+LIQUIDATION <b>${formatChange(change5m)}</b>${formatOIPair(previousOI5m, currentOI5m)}
+15m: <b>${formatChange(change15m)}</b>${formatOIPair(previousOI15m, currentOI15m)}
+
+Signal Strength: <b>${strength}</b>
+
+Links:
+Bybit: ${bybitUrl}
+Coinglass: ${coinglassUrl}
+
+Timestamp: ${utcTime}
+      `.trim();
+    }
+
     return `
-      🚨 OI Event Detected ${strengthEmoji}
+🚨 OI Event Detected ${strengthEmoji}
 
-      Symbol: <b>${symbol}</b>
+Symbol: <b>${symbol}</b>
 
-      Type: <b>${type}</b>
+Type: <b>${type}</b>
 
-      OI Change:
-      • 5m: <b>${formatChange(change5m)}</b>${formatOIPair(previousOI5m, currentOI5m)}
-      • 15m: <b>${formatChange(change15m)}</b>${formatOIPair(previousOI15m, currentOI15m)}
+OI Change:
+• 5m: <b>${formatChange(change5m)}</b>${formatOIPair(previousOI5m, currentOI5m)}
+• 15m: <b>${formatChange(change15m)}</b>${formatOIPair(previousOI15m, currentOI15m)}
 
-      Signal Strength: <b>${strength}</b>
+Signal Strength: <b>${strength}</b>
 
-      Links:
-      Bybit: ${bybitUrl}
-      Coinglass: ${coinglassUrl}
+Links:
+Bybit: ${bybitUrl}
+Coinglass: ${coinglassUrl}
 
-      Timestamp: ${utcTime}
+Timestamp: ${utcTime}
     `.trim();
   }
 

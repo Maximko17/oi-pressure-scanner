@@ -13,6 +13,10 @@ class OIService {
     //   change15m: number | null, // 15min change %
     //   candleTs5m: number,      // last processed 5min candle timestamp
     //   candleTs15m: number,     // last processed 15min candle timestamp
+    //   previousOI5m: number,    // previous candle OI for 5min interval
+    //   currentOI5m: number,     // current candle OI for 5min interval
+    //   previousOI15m: number,   // previous candle OI for 15min interval
+    //   currentOI15m: number,    // current candle OI for 15min interval
     //   fetchTime: Date          // last update time
     // }>
     this.currentOI = new Map();

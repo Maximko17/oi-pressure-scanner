@@ -38,118 +38,152 @@ class OIService {
    * Fetch OI for a single symbol
    */
   async fetchOIForSymbol(symbol, intervalTime = '5min') {
-    return this.limit(async () => {
-      try {
-        logger.debug('Fetching OI for symbol', { symbol, intervalTime });
+  return this.limit(async () => {
+    try {
+      logger.debug('Fetching OI for symbol', { symbol, intervalTime });
 
-        const dataList = await bybitClient.fetchOpenInterest(symbol, intervalTime, 2);
+      const dataList = await bybitClient.fetchOpenInterest(symbol, intervalTime, 2);
 
-        if (!dataList || dataList.length < 2) {
-          logger.warn('Insufficient OI data returned', {
-            symbol,
-            intervalTime,
-            count: dataList?.length || 0,
-          });
-          return null;
-        }
-
-        // Sort by timestamp ascending
-        const sortedList = dataList.sort((a, b) => {
-          return parseInt(a.timestamp || 0) - parseInt(b.timestamp || 0);
+      if (!dataList || dataList.length < 2) {
+        logger.warn('Insufficient OI data returned', {
+          symbol,
+          intervalTime,
+          count: dataList?.length || 0,
         });
+        return null;
+      }
 
-        const latestCandle = sortedList[sortedList.length - 1];
-        const currentTimestamp = parseInt(latestCandle.timestamp || 0);
+      // Safe sort (do not mutate original array)
+      const sortedList = [...dataList].sort((a, b) => {
+        return parseInt(a.timestamp || 0) - parseInt(b.timestamp || 0);
+      });
 
-        if (!currentTimestamp || currentTimestamp <= 0) {
-          logger.warn('Invalid timestamp in OI data', {
+      const previous = sortedList[sortedList.length - 2];
+      const latestCandle = sortedList[sortedList.length - 1];
+
+      const prevTs = parseInt(previous.timestamp || 0);
+      const currentTimestamp = parseInt(latestCandle.timestamp || 0);
+
+      if (!prevTs || !currentTimestamp) {
+        logger.warn('Invalid timestamps in OI data', {
+          symbol,
+          intervalTime,
+          prevTs,
+          currentTimestamp,
+        });
+        return null;
+      }
+
+      // Validate interval gap
+      const expectedGap =
+        intervalTime === '5min'
+          ? 5 * 60 * 1000
+          : intervalTime === '15min'
+          ? 15 * 60 * 1000
+          : null;
+
+      if (expectedGap) {
+        const diff = currentTimestamp - prevTs;
+
+        if (Math.abs(diff - expectedGap) > 60 * 1000) {
+          logger.warn('Invalid interval gap detected', {
             symbol,
             intervalTime,
-            timestamp: latestCandle.timestamp,
+            diff,
+            expectedGap,
           });
           return null;
         }
+      }
 
-        // Get existing data for this symbol
-        const existingData = this.currentOI.get(symbol) || {};
+      // Get existing data
+      const existingData = this.currentOI.get(symbol) || {};
 
-        // Check if this candle has already been processed
-        const existingTs = intervalTime === '5min' ? existingData.candleTs5m : existingData.candleTs15m;
-        if (existingTs && existingTs === currentTimestamp) {
-          logger.debug('Candle already processed, skipping', {
-            symbol,
-            intervalTime,
-            timestamp: currentTimestamp,
-          });
-          return null;
-        }
+      const existingTs =
+        intervalTime === '5min'
+          ? existingData.candleTs5m
+          : existingData.candleTs15m;
 
-        logger.debug('New candle detected', {
+      if (existingTs && existingTs === currentTimestamp) {
+        logger.debug('Candle already processed, skipping', {
           symbol,
           intervalTime,
           timestamp: currentTimestamp,
-          previousTimestamp: existingTs,
         });
+        return null;
+      }
 
-        // Calculate change
-        const previous = sortedList[sortedList.length - 2];
-        const previousOI = parseFloat(previous.openInterest || 0);
-        const currentOI = parseFloat(latestCandle.openInterest || 0);
+      logger.debug('New candle detected', {
+        symbol,
+        intervalTime,
+        timestamp: currentTimestamp,
+        previousTimestamp: existingTs,
+      });
 
-        if (isNaN(previousOI) || isNaN(currentOI) || previousOI <= 0 || currentOI <= 0) {
-          logger.warn('Invalid OI values', {
-            symbol,
-            intervalTime,
-            previousOI,
-            currentOI,
-          });
-          return null;
-        }
+      const previousOI = parseFloat(previous.openInterest || 0);
+      const currentOI = parseFloat(latestCandle.openInterest || 0);
 
-        const changePercent = ((currentOI - previousOI) / previousOI) * 100;
-
-        // Update the stored data for this symbol
-        const updatedData = {
-          ...existingData,
-          value: currentOI,
-          fetchTime: new Date(),
-        };
-
-        // Set change and timestamp for the specific interval
-        if (intervalTime === '5min') {
-          updatedData.change5m = changePercent;
-          updatedData.candleTs5m = currentTimestamp;
-        } else if (intervalTime === '15min') {
-          updatedData.change15m = changePercent;
-          updatedData.candleTs15m = currentTimestamp;
-        }
-
-        this.currentOI.set(symbol, updatedData);
-
-        logger.debug('OI data updated', {
-          symbol,
-          intervalTime,
-          changePercent,
-          currentOI,
-        });
-
-        return {
+      if (
+        isNaN(previousOI) ||
+        isNaN(currentOI) ||
+        previousOI <= 0 ||
+        currentOI <= 0
+      ) {
+        logger.warn('Invalid OI values', {
           symbol,
           intervalTime,
           previousOI,
           currentOI,
-          changePercent,
-        };
-      } catch (error) {
-        logger.error('Failed to fetch OI for symbol', {
-          symbol,
-          intervalTime,
-          error: error.message,
         });
         return null;
       }
-    });
-  }
+
+      const changePercent = ((currentOI - previousOI) / previousOI) * 100;
+
+      const updatedData = {
+        ...existingData,
+        value: currentOI,
+        fetchTime: new Date(),
+      };
+
+      if (intervalTime === '5min') {
+        updatedData.change5m = changePercent;
+        updatedData.candleTs5m = currentTimestamp;
+        updatedData.previousOI5m = previousOI;
+        updatedData.currentOI5m = currentOI;
+      } else if (intervalTime === '15min') {
+        updatedData.change15m = changePercent;
+        updatedData.candleTs15m = currentTimestamp;
+        updatedData.previousOI15m = previousOI;
+        updatedData.currentOI15m = currentOI;
+      }
+
+      this.currentOI.set(symbol, updatedData);
+
+      logger.debug('OI data updated', {
+        symbol,
+        intervalTime,
+        changePercent,
+        currentOI,
+      });
+
+      return {
+        symbol,
+        intervalTime,
+        previousOI,
+        currentOI,
+        changePercent,
+      };
+    } catch (error) {
+      logger.error('Failed to fetch OI for symbol', {
+        symbol,
+        intervalTime,
+        error: error.message,
+      });
+      return null;
+    }
+  });
+}
 
   /**
    * Get OI change for a symbol with specific interval
@@ -219,6 +253,10 @@ class OIService {
       currentOI: data.value,
       change5m: data.change5m,
       change15m: data.change15m,
+      previousOI5m: data.previousOI5m,
+      currentOI5m: data.currentOI5m,
+      previousOI15m: data.previousOI15m,
+      currentOI15m: data.currentOI15m,
       available: data.change5m !== null && data.change15m !== null,
       fetchTime: data.fetchTime,
     };

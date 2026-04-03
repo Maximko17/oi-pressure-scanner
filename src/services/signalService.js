@@ -91,6 +91,10 @@ class SignalService {
         change15m: change15m.changePercent,
         strength: signalInfo.level,
         currentOI: change5m.currentOI,
+        previousOI5m: change5m.previousOI,
+        currentOI5m: change5m.currentOI,
+        previousOI15m: change15m.previousOI,
+        currentOI15m: change15m.currentOI,
         timestamp: new Date().toISOString(),
       };
     } catch (error) {

@@ -277,7 +277,7 @@ class TelegramService {
    * Format detailed symbol information message using cached data
    */
   formatSymbolDetails(symbol, symbolData) {
-    const { currentOI, change5m, change15m, available, fetchTime } = symbolData;
+    const { currentOI, change5m, change15m, previousOI5m, currentOI5m, previousOI15m, currentOI15m, available, fetchTime } = symbolData;
 
     // Determine signal type and strength based on 5m change
     let signalType = 'NONE';
@@ -308,6 +308,12 @@ class TelegramService {
       return `${val >= 0 ? '+' : ''}${val.toFixed(2)}%`;
     };
 
+    // Format OI values with previous→current notation
+    const formatOIPair = (prev, curr) => {
+      if (prev == null || curr == null) return '';
+      return ` (${prev.toLocaleString()} → ${curr.toLocaleString()})`;
+    };
+
     const change5mText = formatChange(change5m);
     const change15mText = formatChange(change15m);
 
@@ -316,24 +322,23 @@ class TelegramService {
     const coinglassUrl = `https://www.coinglass.com/tv/ru/Bybit_${symbol}`;
 
     return `
-📊 Symbol: <b>${symbol}</b>
+      📊 Symbol: <b>${symbol}</b>
 
-Open Interest:
-• Current: <b>${currentOI.toLocaleString()}</b>
-• 5m change: <b>${change5mText}</b>
-• 15m change: <b>${change15mText}</b>
+      Open Interest:
+      • 5m change: <b>${change5mText}</b>${formatOIPair(previousOI5m, currentOI5m)}
+      • 15m change: <b>${change15mText}</b>${formatOIPair(previousOI15m, currentOI15m)}
 
-Status:
-• Signal strength: <b>${signalStrength}</b>
-• Event type: <b>${signalType}</b>
+      Status:
+      • Signal strength: <b>${signalStrength}</b>
+      • Event type: <b>${signalType}</b>
 
-Market Info:
-• 24h Volume: <b>$${volumeFormatted}</b>
-• 24h Price Range: <b>${rangePercent}%</b>
+      Market Info:
+      • 24h Volume: <b>$${volumeFormatted}</b>
+      • 24h Price Range: <b>${rangePercent}%</b>
 
-Links:
-Bybit: ${bybitUrl}
-Coinglass: ${coinglassUrl}
+      Links:
+      Bybit: ${bybitUrl}
+      Coinglass: ${coinglassUrl}
     `.trim();
   }
 
@@ -346,61 +351,61 @@ Coinglass: ${coinglassUrl}
     this.chatUI.delete(chatId);
 
     const message = `
-📊 <b>Trading Strategy Overview</b>
+      📊 <b>Trading Strategy Overview</b>
 
-This bot monitors <b>Open Interest (OI)</b> on Bybit cryptocurrency futures to detect abnormal market activity.
+      This bot monitors <b>Open Interest (OI)</b> on Bybit cryptocurrency futures to detect abnormal market activity.
 
-━━━━━━━━━━━━━━━━━━━━━
+      ━━━━━━━━━━━━━━━━━━━━━
 
-🎯 <b>What the Bot Monitors</b>
+      🎯 <b>What the Bot Monitors</b>
 
-• Open Interest changes on USDT perpetual futures
-• Real-time OI data from Bybit API
+      • Open Interest changes on USDT perpetual futures
+      • Real-time OI data from Bybit API
 
-📋 <b>Symbol Selection</b>
+      📋 <b>Symbol Selection</b>
 
-• High 24h volume (turnover > $50M)
-• High 24h volatility (price range > 5%)
-• Active symbols refreshed every 15 minutes
+      • High 24h volume (turnover > $50M)
+      • High 24h volatility (price range > 5%)
+      • Active symbols refreshed every 15 minutes
 
-━━━━━━━━━━━━━━━━━━━━━
+      ━━━━━━━━━━━━━━━━━━━━━
 
-📈 <b>Signal Types</b>
+      📈 <b>Signal Types</b>
 
-🟢 <b>BUILDUP</b>
-• OI is increasing
-• New positions are being opened
-• Market is preparing for a move
+      🟢 <b>BUILDUP</b>
+      • OI is increasing
+      • New positions are being opened
+      • Market is preparing for a move
 
-🔴 <b>LIQUIDATION</b>
-• OI is decreasing
-• Positions are being closed or liquidated
-• Movement is already happening
+      🔴 <b>LIQUIDATION</b>
+      • OI is decreasing
+      • Positions are being closed or liquidated
+      • Movement is already happening
 
-━━━━━━━━━━━━━━━━━━━━━
+      ━━━━━━━━━━━━━━━━━━━━━
 
-⏱ <b>Timeframes</b>
+      ⏱ <b>Timeframes</b>
 
-• <b>5-minute OI</b> → primary signal trigger
-• <b>15-minute OI</b> → confirmation (must match direction)
+      • <b>5-minute OI</b> → primary signal trigger
+      • <b>15-minute OI</b> → confirmation (must match direction)
 
-━━━━━━━━━━━━━━━━━━━━━
+      ━━━━━━━━━━━━━━━━━━━━━
 
-💪 <b>Signal Strength</b>
+      💪 <b>Signal Strength</b>
 
-Based on the percentage change in OI:
+      Based on the percentage change in OI:
 
-🟡 <b>WEAK</b> — 10–15% change
-🟠 <b>STRONG</b> — 15–25% change
-🔴 <b>EXTREME</b> — 25%+ change
+      🟡 <b>WEAK</b> — 10–15% change
+      🟠 <b>STRONG</b> — 15–25% change
+      🔴 <b>EXTREME</b> — 25%+ change
 
-━━━━━━━━━━━━━━━━━━━━━
+      ━━━━━━━━━━━━━━━━━━━━━
 
-🔔 <b>Alerts</b>
+      🔔 <b>Alerts</b>
 
-When a signal is detected, the bot sends a Telegram notification with the symbol, OI changes, signal type, and strength.
+      When a signal is detected, the bot sends a Telegram notification with the symbol, OI changes, signal type, and strength.
 
-Cooldown: 10 minutes per symbol to avoid spam.
+      Cooldown: 10 minutes per symbol to avoid spam.
     `.trim();
 
     await this.bot.sendMessage(chatId, message, {
